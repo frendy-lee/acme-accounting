@@ -50,8 +50,8 @@ export class Ticket extends Model {
   declare assigneeId: number;
 
   @BelongsTo(() => Company)
-  company: Company;
+  company?: Company;
 
   @BelongsTo(() => User)
-  assignee: User;
+  assignee?: User;
 }

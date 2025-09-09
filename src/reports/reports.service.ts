@@ -1,8 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import fs from 'fs';
 import path from 'path';
 import { performance } from 'perf_hooks';
 import { randomUUID } from 'crypto';
+import {
+  TIMEOUTS,
+  PERFORMANCE_METRICS,
+  JOB_STATUS,
+  ERROR_MESSAGES,
+} from '../common/constants';
 
 interface JobMetrics {
   responseTime?: number;
@@ -46,6 +52,7 @@ interface SystemMetrics {
 
 @Injectable()
 export class ReportsService {
+  private readonly logger = new Logger(ReportsService.name);
   private jobs = new Map<string, JobData>();
   private jobQueue: string[] = [];
   private isProcessing = false;
@@ -57,7 +64,7 @@ export class ReportsService {
     memoryEfficiency: 0,
     successRate: 0,
     legacyComparisonData: {
-      avgSyncResponseTime: 10000, // Baseline: 10 seconds
+      avgSyncResponseTime: PERFORMANCE_METRICS.LEGACY_AVG_SYNC_RESPONSE_TIME_MS,
       avgAsyncResponseTime: 0,
       performanceImprovement: '0%',
     },
@@ -70,7 +77,7 @@ export class ReportsService {
     fs: 'idle',
   };
 
-  state(scope: string) {
+  state(scope: keyof typeof this.states) {
     return this.states[scope];
   }
 
@@ -107,7 +114,9 @@ export class ReportsService {
 
     // Start processing if not already running
     if (!this.isProcessing) {
-      setImmediate(() => this.processQueue());
+      setImmediate(() => {
+        void this.processQueue();
+      });
     }
 
     const responseTime = performance.now() - responseStart;
@@ -130,15 +139,15 @@ export class ReportsService {
     const job = this.jobs.get(jobId);
 
     if (!job) {
-      return { success: false, error: 'Job not found' };
+      return { success: false, error: ERROR_MESSAGES.JOB_NOT_FOUND };
     }
 
-    if (job.status !== 'completed') {
+    if (job.status !== JOB_STATUS.COMPLETED) {
       return { success: false, error: `Job status: ${job.status}` };
     }
 
     try {
-      const results: any = {};
+      const results: Record<string, string> = {};
       for (const resultPath of job.resultPaths) {
         const fileName = path.basename(resultPath);
         results[fileName] = fs.readFileSync(resultPath, 'utf-8');
@@ -155,9 +164,16 @@ export class ReportsService {
         },
       };
     } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      this.logger.error(
+        `Failed to read job results: ${errorMessage}`,
+        errorStack,
+      );
       return {
         success: false,
-        error: `Failed to read results: ${error.message}`,
+        error: `${ERROR_MESSAGES.FAILED_TO_READ_RESULTS}: ${errorMessage}`,
       };
     }
   }
@@ -198,8 +214,12 @@ export class ReportsService {
       try {
         await this.processJob(job);
       } catch (error) {
-        job.status = 'failed';
-        job.errorMessage = error.message;
+        const errorMessage =
+          error instanceof Error ? error.message : 'Unknown error';
+        const errorStack = error instanceof Error ? error.stack : undefined;
+        this.logger.error(`Job ${jobId} failed: ${errorMessage}`, errorStack);
+        job.status = JOB_STATUS.FAILED;
+        job.errorMessage = errorMessage;
         job.timestamps.completed = performance.now();
       }
 
@@ -211,8 +231,10 @@ export class ReportsService {
   }
 
   private async processJob(job: JobData): Promise<void> {
-    job.status = 'processing';
+    job.status = JOB_STATUS.PROCESSING;
     job.timestamps.started = performance.now();
+
+    this.logger.log(`Starting job ${job.jobId} (type: ${job.type})`);
     job.metrics.memoryUsage = {
       before: process.memoryUsage(),
       after: {
@@ -232,10 +254,17 @@ export class ReportsService {
         await this.processSingleReport(job, job.type);
       }
 
-      job.status = 'completed';
+      job.status = JOB_STATUS.COMPLETED;
+      this.logger.log(
+        `Completed job ${job.jobId} in ${((job.timestamps.completed || performance.now()) - job.timestamps.started).toFixed(2)}ms`,
+      );
     } catch (error) {
-      job.status = 'failed';
-      job.errorMessage = error.message;
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      job.status = JOB_STATUS.FAILED;
+      job.errorMessage = errorMessage;
+      this.logger.error(`Job ${job.jobId} failed: ${errorMessage}`, errorStack);
       throw error;
     } finally {
       job.timestamps.completed = performance.now();
@@ -271,7 +300,7 @@ export class ReportsService {
           }
           resolve();
         } catch (error) {
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         }
       });
     });
@@ -328,12 +357,22 @@ export class ReportsService {
   }
 
   private cleanupOldJobs(): void {
-    const oneHourAgo = performance.now() - 60 * 60 * 1000; // 1 hour
+    const cleanupThreshold =
+      performance.now() - TIMEOUTS.JOB_CLEANUP_HOURS * 60 * 60 * 1000;
 
+    let cleanedCount = 0;
     for (const [jobId, job] of this.jobs.entries()) {
-      if (job.timestamps.completed && job.timestamps.completed < oneHourAgo) {
+      if (
+        job.timestamps.completed &&
+        job.timestamps.completed < cleanupThreshold
+      ) {
         this.jobs.delete(jobId);
+        cleanedCount++;
       }
+    }
+
+    if (cleanedCount > 0) {
+      this.logger.debug(`Cleaned up ${cleanedCount} old job(s)`);
     }
   }
 
@@ -465,7 +504,7 @@ export class ReportsService {
         for (const line of lines) {
           const [, account, , debit, credit] = line.split(',');
 
-          if (balances.hasOwnProperty(account)) {
+          if (Object.prototype.hasOwnProperty.call(balances, account)) {
             balances[account] +=
               parseFloat(String(debit || 0)) - parseFloat(String(credit || 0));
           }

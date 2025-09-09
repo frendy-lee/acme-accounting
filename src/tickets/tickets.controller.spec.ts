@@ -355,7 +355,7 @@ describe('TicketsController', () => {
           }),
         ).rejects.toThrow('Database error');
 
-        Ticket.create = originalCreate;
+        (Ticket.create as any) = originalCreate;
       });
     });
   });
