@@ -1,4 +1,13 @@
-import { Body, ConflictException, Controller, Get, Post } from '@nestjs/common';
+import {
+  Body,
+  ConflictException,
+  Controller,
+  Get,
+  Post,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { Company } from '../../db/models/Company';
 import {
   Ticket,
@@ -7,31 +16,56 @@ import {
   TicketType,
 } from '../../db/models/Ticket';
 import { User, UserRole } from '../../db/models/User';
+import { CreateTicketDto } from './dto/create-ticket.dto';
+import { TicketResponseDto } from './dto/ticket-response.dto';
+import { API_ROUTES, ERROR_MESSAGES } from '../common/constants';
 
-interface newTicketDto {
-  type: TicketType;
-  companyId: number;
-}
-
-interface TicketDto {
-  id: number;
-  type: TicketType;
-  companyId: number;
-  assigneeId: number;
-  status: TicketStatus;
-  category: TicketCategory;
-}
-
-@Controller('api/v1/tickets')
+@ApiTags('Tickets')
+@Controller(API_ROUTES.TICKETS)
+@UsePipes(
+  new ValidationPipe({
+    transform: true,
+    whitelist: true,
+    forbidNonWhitelisted: true,
+  }),
+)
 export class TicketsController {
   @Get()
-  async findAll() {
+  @ApiOperation({
+    summary: 'Get all tickets',
+    description: 'Retrieve all tickets with company and user information',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'List of all tickets',
+    type: [TicketResponseDto],
+  })
+  async findAll(): Promise<Ticket[]> {
     return await Ticket.findAll({ include: [Company, User] });
   }
 
   @Post()
-  async create(@Body() newTicketDto: newTicketDto) {
-    const { type, companyId } = newTicketDto;
+  @ApiOperation({
+    summary: 'Create a new ticket',
+    description:
+      'Create a new ticket with automatic assignee assignment based on business rules',
+  })
+  @ApiBody({ type: CreateTicketDto })
+  @ApiResponse({
+    status: 201,
+    description: 'Ticket created successfully',
+    type: TicketResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid input data' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Business rule conflict (duplicate ticket, no suitable assignee, etc.)',
+  })
+  async create(
+    @Body() createTicketDto: CreateTicketDto,
+  ): Promise<TicketResponseDto> {
+    const { type, companyId } = createTicketDto;
 
     if (type === TicketType.registrationAddressChange) {
       const existingTicket = await Ticket.findOne({
@@ -44,7 +78,7 @@ export class TicketsController {
 
       if (existingTicket) {
         throw new ConflictException(
-          `Company already has an active registrationAddressChange ticket`,
+          ERROR_MESSAGES.DUPLICATE_REGISTRATION_ADDRESS_CHANGE,
         );
       }
     }
@@ -57,7 +91,9 @@ export class TicketsController {
     } else if (type === TicketType.strikeOff) {
       category = TicketCategory.management;
     } else {
-      throw new ConflictException(`Unsupported ticket type: ${String(type)}`);
+      throw new ConflictException(
+        `${ERROR_MESSAGES.UNSUPPORTED_TICKET_TYPE}: ${String(type)}`,
+      );
     }
 
     let assignee: User | undefined;
@@ -69,9 +105,7 @@ export class TicketsController {
       });
 
       if (!assignees.length) {
-        throw new ConflictException(
-          `Cannot find user with role accountant to create a ticket`,
-        );
+        throw new ConflictException(ERROR_MESSAGES.NO_ACCOUNTANT);
       }
 
       assignee = assignees[0];
@@ -83,7 +117,7 @@ export class TicketsController {
 
       if (corporateSecretaries.length > 1) {
         throw new ConflictException(
-          `Multiple users with role corporateSecretary. Cannot create a ticket`,
+          ERROR_MESSAGES.MULTIPLE_CORPORATE_SECRETARY,
         );
       }
 
@@ -96,16 +130,14 @@ export class TicketsController {
         });
 
         if (directors.length > 1) {
-          throw new ConflictException(
-            `Multiple users with role director. Cannot create a ticket`,
-          );
+          throw new ConflictException(ERROR_MESSAGES.MULTIPLE_DIRECTORS);
         }
 
         if (directors.length === 1) {
           assignee = directors[0];
         } else {
           throw new ConflictException(
-            `Cannot find user with role corporateSecretary or director to create a ticket`,
+            ERROR_MESSAGES.NO_CORPORATE_SECRETARY_OR_DIRECTOR,
           );
         }
       }
@@ -116,15 +148,11 @@ export class TicketsController {
       });
 
       if (directors.length > 1) {
-        throw new ConflictException(
-          `Multiple users with role director. Cannot create a ticket`,
-        );
+        throw new ConflictException(ERROR_MESSAGES.MULTIPLE_DIRECTORS);
       }
 
       if (directors.length === 0) {
-        throw new ConflictException(
-          `Cannot find user with role director to create a ticket`,
-        );
+        throw new ConflictException(ERROR_MESSAGES.NO_DIRECTOR);
       }
 
       assignee = directors[0];
@@ -132,7 +160,7 @@ export class TicketsController {
 
     if (!assignee) {
       throw new ConflictException(
-        `Unable to determine assignee for ticket type: ${String(type)}`,
+        `${ERROR_MESSAGES.UNABLE_TO_DETERMINE_ASSIGNEE}: ${String(type)}`,
       );
     }
 
@@ -164,7 +192,7 @@ export class TicketsController {
 
         await transaction.commit();
 
-        const ticketDto: TicketDto = {
+        const ticketDto: TicketResponseDto = {
           id: ticket.id,
           type: ticket.type,
           assigneeId: ticket.assigneeId,
@@ -187,7 +215,7 @@ export class TicketsController {
         status: TicketStatus.open,
       });
 
-      const ticketDto: TicketDto = {
+      const ticketDto: TicketResponseDto = {
         id: ticket.id,
         type: ticket.type,
         assigneeId: ticket.assigneeId,

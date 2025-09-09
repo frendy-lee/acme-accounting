@@ -6,14 +6,51 @@ import {
   Param,
   Query,
   BadRequestException,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiParam,
+  ApiQuery,
+} from '@nestjs/swagger';
 import { ReportsService } from './reports.service';
+import { ReportType } from './dto/create-report-job.dto';
+import {
+  CreateReportJobResponseDto,
+  JobStatusResponseDto,
+} from './dto/report-response.dto';
+import {
+  API_ROUTES,
+  REPORT_TYPES,
+  ERROR_MESSAGES,
+  HTTP_STATUS_MESSAGES,
+} from '../common/constants';
 
-@Controller('api/v1/reports')
+@ApiTags('Reports')
+@Controller(API_ROUTES.REPORTS)
+@UsePipes(
+  new ValidationPipe({
+    transform: true,
+    whitelist: true,
+    forbidNonWhitelisted: true,
+  }),
+)
 export class ReportsController {
   constructor(private reportsService: ReportsService) {}
 
   @Get()
+  @ApiOperation({
+    summary: 'Get system status and metrics',
+    description:
+      'Retrieve current system status, job statistics, and performance metrics',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'System status retrieved successfully',
+  })
   getSystemStatus() {
     const allJobs = this.reportsService.getAllJobs();
     const metrics = this.reportsService.getSystemMetrics();
@@ -44,13 +81,30 @@ export class ReportsController {
 
   @Post()
   @HttpCode(201)
-  createReportJob(@Query('type') type?: string) {
-    const validTypes = ['accounts', 'yearly', 'fs', 'all'];
-    const reportType = type || 'all';
+  @ApiOperation({
+    summary: 'Create a new report job',
+    description: 'Create a new background report generation job',
+  })
+  @ApiQuery({
+    name: 'type',
+    required: false,
+    enum: Object.values(REPORT_TYPES),
+    description: 'Type of report to generate',
+    example: REPORT_TYPES.ALL,
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Report job created successfully',
+    type: CreateReportJobResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid report type' })
+  createReportJob(@Query('type') type?: string): CreateReportJobResponseDto {
+    const validTypes = Object.values(REPORT_TYPES);
+    const reportType = (type || REPORT_TYPES.ALL) as ReportType;
 
     if (!validTypes.includes(reportType)) {
       throw new BadRequestException(
-        `Invalid report type. Valid types: ${validTypes.join(', ')}`,
+        `${ERROR_MESSAGES.INVALID_REPORT_TYPE}. Valid types: ${validTypes.join(', ')}`,
       );
     }
 
@@ -62,28 +116,44 @@ export class ReportsController {
       jobId: result.jobId,
       type: reportType,
       status: 'pending',
-      message: 'Report job created successfully',
+      message: HTTP_STATUS_MESSAGES.REPORT_JOB_CREATED,
       responseTime: `${result.responseTime.toFixed(2)}ms`,
-      statusUrl: `/api/v1/reports/status/${result.jobId}`,
-      resultUrl: `/api/v1/reports/result/${result.jobId}`,
+      statusUrl: `/${API_ROUTES.REPORTS}/status/${result.jobId}`,
+      resultUrl: `/${API_ROUTES.REPORTS}/result/${result.jobId}`,
     };
   }
 
   @Get('status/:jobId')
-  getJobStatus(@Param('jobId') jobId: string) {
+  @ApiOperation({
+    summary: 'Get job status',
+    description: 'Check the status of a report generation job',
+  })
+  @ApiParam({
+    name: 'jobId',
+    description: 'The unique job identifier',
+    example: '12345678-1234-1234-1234-123456789012',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Job status retrieved successfully',
+    type: JobStatusResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Job not found' })
+  getJobStatus(@Param('jobId') jobId: string): JobStatusResponseDto {
     const job = this.reportsService.getJobStatus(jobId);
 
     if (!job) {
-      throw new BadRequestException('Job not found');
+      throw new BadRequestException(ERROR_MESSAGES.JOB_NOT_FOUND);
     }
 
-    const response: any = {
+    const response: JobStatusResponseDto = {
       jobId: job.jobId,
       type: job.type,
       status: job.status,
       timestamps: {
         created: new Date(job.timestamps.created).toISOString(),
       },
+      message: '',
     };
 
     if (job.timestamps.started) {
@@ -96,24 +166,40 @@ export class ReportsController {
       response.timestamps.completed = new Date(
         job.timestamps.completed,
       ).toISOString();
-      response.processingTime = `${job.metrics.processingTime?.toFixed(2)}ms`;
+      response.processingTime = `${job.metrics?.processingTime?.toFixed(2) ?? 0}ms`;
     }
 
     if (job.status === 'processing') {
-      response.message = 'Report is being processed in background';
+      response.message = HTTP_STATUS_MESSAGES.REPORT_PROCESSING;
     } else if (job.status === 'completed') {
-      response.message = 'Report completed successfully';
-      response.resultUrl = `/api/v1/reports/result/${jobId}`;
+      response.message = HTTP_STATUS_MESSAGES.REPORT_COMPLETED;
+      response.resultUrl = `/${API_ROUTES.REPORTS}/result/${jobId}`;
       response.resultPaths = job.resultPaths;
     } else if (job.status === 'failed') {
-      response.message = 'Report processing failed';
-      response.error = job.errorMessage;
+      response.message = HTTP_STATUS_MESSAGES.REPORT_FAILED;
+      if (job.errorMessage) {
+        response.error = job.errorMessage;
+      }
     }
 
     return response;
   }
 
   @Get('result/:jobId')
+  @ApiOperation({
+    summary: 'Get job result',
+    description: 'Retrieve the results of a completed report generation job',
+  })
+  @ApiParam({
+    name: 'jobId',
+    description: 'The unique job identifier',
+    example: '12345678-1234-1234-1234-123456789012',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Report data retrieved successfully',
+  })
+  @ApiResponse({ status: 400, description: 'Job not found or not completed' })
   getJobResult(@Param('jobId') jobId: string) {
     const result = this.reportsService.getJobResult(jobId);
 
@@ -124,12 +210,21 @@ export class ReportsController {
     return {
       success: true,
       jobId,
-      message: 'Report data retrieved successfully',
-      data: result.data,
+      message: HTTP_STATUS_MESSAGES.REPORT_RETRIEVED,
+      data: result.data as unknown,
     };
   }
 
   @Get('metrics')
+  @ApiOperation({
+    summary: 'Get performance metrics',
+    description:
+      'Retrieve detailed performance metrics and system comparison data',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Performance metrics retrieved successfully',
+  })
   getPerformanceMetrics() {
     const metrics = this.reportsService.getSystemMetrics();
 
@@ -169,10 +264,19 @@ export class ReportsController {
   // Legacy endpoint for backward compatibility
   @Post('legacy')
   @HttpCode(201)
+  @ApiOperation({
+    summary: 'Generate legacy reports',
+    description:
+      'Generate reports using the legacy synchronous method (for backward compatibility)',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Legacy reports generated successfully',
+  })
   generateLegacy() {
     this.reportsService.accounts();
     this.reportsService.yearly();
     this.reportsService.fs();
-    return { message: 'finished' };
+    return { message: HTTP_STATUS_MESSAGES.LEGACY_FINISHED };
   }
 }

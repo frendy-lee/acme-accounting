@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ReportsService } from './reports.service';
 import * as fs from 'fs';
-import * as path from 'path';
 
 // Mock fs module
 jest.mock('fs', () => ({
@@ -22,7 +21,10 @@ describe('ReportsService', () => {
     service = module.get<ReportsService>(ReportsService);
 
     // Setup mock data for file operations
-    mockFs.readdirSync.mockReturnValue(['test1.csv', 'test2.csv'] as any);
+    mockFs.readdirSync.mockReturnValue([
+      'test1.csv',
+      'test2.csv',
+    ] as unknown as fs.Dirent[]);
     mockFs.readFileSync.mockReturnValue(
       '2023-01-01,Cash,,100,0\n2023-01-02,Sales Revenue,,0,200\n2023-01-03,Rent Expense,,50,0',
     );
@@ -178,8 +180,11 @@ describe('ReportsService', () => {
         const jobResult = service.getJobResult(result.jobId);
         expect(jobResult.success).toBe(true);
         expect(jobResult.data).toBeDefined();
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         expect(jobResult.data.jobId).toBe(result.jobId);
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         expect(jobResult.data.type).toBe('accounts');
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         expect(jobResult.data.metrics).toBeDefined();
       }
     });
@@ -216,7 +221,7 @@ describe('ReportsService', () => {
   describe('Performance Comparison', () => {
     it('should calculate performance improvement correctly', () => {
       // Create a job and get metrics
-      const result = service.createJob('accounts');
+      service.createJob('accounts');
       const metrics = service.getSystemMetrics();
 
       // Response time should be significantly faster than legacy (10000ms)

@@ -32,5 +32,5 @@ export class User extends Model {
   declare companyId: number;
 
   @BelongsTo(() => Company)
-  company: Company;
+  company?: Company;
 }

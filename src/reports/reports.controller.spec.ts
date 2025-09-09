@@ -18,7 +18,6 @@ const mockReportsService = {
 
 describe('ReportsController', () => {
   let controller: ReportsController;
-  let service: ReportsService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -32,7 +31,6 @@ describe('ReportsController', () => {
     }).compile();
 
     controller = module.get<ReportsController>(ReportsController);
-    service = module.get<ReportsService>(ReportsService);
   });
 
   afterEach(() => {
@@ -91,7 +89,7 @@ describe('ReportsController', () => {
 
       const result = controller.createReportJob();
 
-      expect(service.createJob).toHaveBeenCalledWith('all');
+      expect(mockReportsService.createJob).toHaveBeenCalledWith('all');
       expect(result.jobId).toBe('test-uuid-123');
       expect(result.type).toBe('all');
       expect(result.status).toBe('pending');
@@ -111,7 +109,7 @@ describe('ReportsController', () => {
 
       const result = controller.createReportJob('accounts');
 
-      expect(service.createJob).toHaveBeenCalledWith('accounts');
+      expect(mockReportsService.createJob).toHaveBeenCalledWith('accounts');
       expect(result.type).toBe('accounts');
     });
 
@@ -273,7 +271,9 @@ describe('ReportsController', () => {
       expect(result.jobId).toBe('test-result');
       expect(result.message).toBe('Report data retrieved successfully');
       expect(result.data).toBeDefined();
-      expect(result.data.results).toBeDefined();
+      expect(result.data).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      expect((result.data as any).results).toBeDefined();
     });
 
     it('should throw BadRequestException for failed job result', () => {
@@ -349,9 +349,9 @@ describe('ReportsController', () => {
     it('should call legacy report methods and return completion message', () => {
       const result = controller.generateLegacy();
 
-      expect(service.accounts).toHaveBeenCalled();
-      expect(service.yearly).toHaveBeenCalled();
-      expect(service.fs).toHaveBeenCalled();
+      expect(mockReportsService.accounts).toHaveBeenCalled();
+      expect(mockReportsService.yearly).toHaveBeenCalled();
+      expect(mockReportsService.fs).toHaveBeenCalled();
       expect(result.message).toBe('finished');
     });
   });
