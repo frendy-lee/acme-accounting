@@ -142,7 +142,98 @@ describe('TicketsController', () => {
           }),
         ).rejects.toEqual(
           new ConflictException(
-            `Cannot find user with role corporateSecretary to create a ticket`,
+            `Cannot find user with role corporateSecretary or director to create a ticket`,
+          ),
+        );
+      });
+
+      it('should prevent duplicate registrationAddressChange tickets', async () => {
+        const company = await Company.create({ name: 'test' });
+        await User.create({
+          name: 'Test User',
+          role: UserRole.corporateSecretary,
+          companyId: company.id,
+        });
+
+        await controller.create({
+          companyId: company.id,
+          type: TicketType.registrationAddressChange,
+        });
+
+        await expect(
+          controller.create({
+            companyId: company.id,
+            type: TicketType.registrationAddressChange,
+          }),
+        ).rejects.toEqual(
+          new ConflictException(
+            `Company already has an active registrationAddressChange ticket`,
+          ),
+        );
+      });
+
+      it('should assign to director if no corporate secretary exists', async () => {
+        const company = await Company.create({ name: 'test' });
+        const director = await User.create({
+          name: 'Director User',
+          role: UserRole.director,
+          companyId: company.id,
+        });
+
+        const ticket = await controller.create({
+          companyId: company.id,
+          type: TicketType.registrationAddressChange,
+        });
+
+        expect(ticket.category).toBe(TicketCategory.corporate);
+        expect(ticket.assigneeId).toBe(director.id);
+        expect(ticket.status).toBe(TicketStatus.open);
+      });
+
+      it('should prefer corporate secretary over director', async () => {
+        const company = await Company.create({ name: 'test' });
+        const corporateSecretary = await User.create({
+          name: 'Secretary User',
+          role: UserRole.corporateSecretary,
+          companyId: company.id,
+        });
+        await User.create({
+          name: 'Director User',
+          role: UserRole.director,
+          companyId: company.id,
+        });
+
+        const ticket = await controller.create({
+          companyId: company.id,
+          type: TicketType.registrationAddressChange,
+        });
+
+        expect(ticket.category).toBe(TicketCategory.corporate);
+        expect(ticket.assigneeId).toBe(corporateSecretary.id);
+        expect(ticket.status).toBe(TicketStatus.open);
+      });
+
+      it('should throw error if multiple directors exist', async () => {
+        const company = await Company.create({ name: 'test' });
+        await User.create({
+          name: 'Director 1',
+          role: UserRole.director,
+          companyId: company.id,
+        });
+        await User.create({
+          name: 'Director 2',
+          role: UserRole.director,
+          companyId: company.id,
+        });
+
+        await expect(
+          controller.create({
+            companyId: company.id,
+            type: TicketType.registrationAddressChange,
+          }),
+        ).rejects.toEqual(
+          new ConflictException(
+            `Multiple users with role director. Cannot create a ticket`,
           ),
         );
       });
