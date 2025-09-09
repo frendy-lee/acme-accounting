@@ -49,12 +49,18 @@ export class TicketsController {
       }
     }
 
-    const category =
-      type === TicketType.managementReport
-        ? TicketCategory.accounting
-        : TicketCategory.corporate;
+    let category: TicketCategory;
+    if (type === TicketType.managementReport) {
+      category = TicketCategory.accounting;
+    } else if (type === TicketType.registrationAddressChange) {
+      category = TicketCategory.corporate;
+    } else if (type === TicketType.strikeOff) {
+      category = TicketCategory.management;
+    } else {
+      throw new ConflictException(`Unsupported ticket type: ${String(type)}`);
+    }
 
-    let assignee: User;
+    let assignee: User | undefined;
 
     if (type === TicketType.managementReport) {
       const assignees = await User.findAll({
@@ -103,27 +109,94 @@ export class TicketsController {
           );
         }
       }
-    } else {
-      throw new ConflictException(`Unsupported ticket type: ${String(type)}`);
+    } else if (type === TicketType.strikeOff) {
+      const directors = await User.findAll({
+        where: { companyId, role: UserRole.director },
+        order: [['createdAt', 'DESC']],
+      });
+
+      if (directors.length > 1) {
+        throw new ConflictException(
+          `Multiple users with role director. Cannot create a ticket`,
+        );
+      }
+
+      if (directors.length === 0) {
+        throw new ConflictException(
+          `Cannot find user with role director to create a ticket`,
+        );
+      }
+
+      assignee = directors[0];
     }
 
-    const ticket = await Ticket.create({
-      companyId,
-      assigneeId: assignee.id,
-      category,
-      type,
-      status: TicketStatus.open,
-    });
+    if (!assignee) {
+      throw new ConflictException(
+        `Unable to determine assignee for ticket type: ${String(type)}`,
+      );
+    }
 
-    const ticketDto: TicketDto = {
-      id: ticket.id,
-      type: ticket.type,
-      assigneeId: ticket.assigneeId,
-      status: ticket.status,
-      category: ticket.category,
-      companyId: ticket.companyId,
-    };
+    if (type === TicketType.strikeOff) {
+      const transaction = await Ticket.sequelize!.transaction();
 
-    return ticketDto;
+      try {
+        await Ticket.update(
+          { status: TicketStatus.resolved },
+          {
+            where: {
+              companyId,
+              status: TicketStatus.open,
+            },
+            transaction,
+          },
+        );
+
+        const ticket = await Ticket.create(
+          {
+            companyId,
+            assigneeId: assignee.id,
+            category,
+            type,
+            status: TicketStatus.open,
+          },
+          { transaction },
+        );
+
+        await transaction.commit();
+
+        const ticketDto: TicketDto = {
+          id: ticket.id,
+          type: ticket.type,
+          assigneeId: ticket.assigneeId,
+          status: ticket.status,
+          category: ticket.category,
+          companyId: ticket.companyId,
+        };
+
+        return ticketDto;
+      } catch (error) {
+        await transaction.rollback();
+        throw error;
+      }
+    } else {
+      const ticket = await Ticket.create({
+        companyId,
+        assigneeId: assignee.id,
+        category,
+        type,
+        status: TicketStatus.open,
+      });
+
+      const ticketDto: TicketDto = {
+        id: ticket.id,
+        type: ticket.type,
+        assigneeId: ticket.assigneeId,
+        status: ticket.status,
+        category: ticket.category,
+        companyId: ticket.companyId,
+      };
+
+      return ticketDto;
+    }
   }
 }
