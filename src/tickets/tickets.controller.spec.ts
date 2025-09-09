@@ -343,7 +343,7 @@ describe('TicketsController', () => {
           companyId: company.id,
         });
 
-        const originalCreate = Ticket.create;
+        const originalCreate = Ticket.create.bind(Ticket);
         (Ticket.create as jest.Mock) = jest
           .fn()
           .mockRejectedValue(new Error('Database error'));
