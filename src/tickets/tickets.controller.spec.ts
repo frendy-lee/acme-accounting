@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Company } from '../../db/models/Company';
 import {
+  Ticket,
   TicketCategory,
   TicketStatus,
   TicketType,
@@ -236,6 +237,125 @@ describe('TicketsController', () => {
             `Multiple users with role director. Cannot create a ticket`,
           ),
         );
+      });
+    });
+
+    describe('strikeOff', () => {
+      it('creates strikeOff ticket assigned to director', async () => {
+        const company = await Company.create({ name: 'test' });
+        const director = await User.create({
+          name: 'Director User',
+          role: UserRole.director,
+          companyId: company.id,
+        });
+
+        const ticket = await controller.create({
+          companyId: company.id,
+          type: TicketType.strikeOff,
+        });
+
+        expect(ticket.category).toBe(TicketCategory.management);
+        expect(ticket.assigneeId).toBe(director.id);
+        expect(ticket.status).toBe(TicketStatus.open);
+        expect(ticket.type).toBe(TicketType.strikeOff);
+      });
+
+      it('should throw error if multiple directors exist', async () => {
+        const company = await Company.create({ name: 'test' });
+        await User.create({
+          name: 'Director 1',
+          role: UserRole.director,
+          companyId: company.id,
+        });
+        await User.create({
+          name: 'Director 2',
+          role: UserRole.director,
+          companyId: company.id,
+        });
+
+        await expect(
+          controller.create({
+            companyId: company.id,
+            type: TicketType.strikeOff,
+          }),
+        ).rejects.toEqual(
+          new ConflictException(
+            `Multiple users with role director. Cannot create a ticket`,
+          ),
+        );
+      });
+
+      it('should throw error if no director exists', async () => {
+        const company = await Company.create({ name: 'test' });
+
+        await expect(
+          controller.create({
+            companyId: company.id,
+            type: TicketType.strikeOff,
+          }),
+        ).rejects.toEqual(
+          new ConflictException(
+            `Cannot find user with role director to create a ticket`,
+          ),
+        );
+      });
+
+      it('should resolve all other active tickets in the company', async () => {
+        const company = await Company.create({ name: 'test' });
+        const director = await User.create({
+          name: 'Director User',
+          role: UserRole.director,
+          companyId: company.id,
+        });
+        await User.create({
+          name: 'Accountant User',
+          role: UserRole.accountant,
+          companyId: company.id,
+        });
+
+        const managementReportTicket = await controller.create({
+          companyId: company.id,
+          type: TicketType.managementReport,
+        });
+
+        expect(managementReportTicket.status).toBe(TicketStatus.open);
+
+        const strikeOffTicket = await controller.create({
+          companyId: company.id,
+          type: TicketType.strikeOff,
+        });
+
+        const updatedManagementTicket = await Ticket.findByPk(
+          managementReportTicket.id,
+        );
+
+        expect(strikeOffTicket.category).toBe(TicketCategory.management);
+        expect(strikeOffTicket.assigneeId).toBe(director.id);
+        expect(strikeOffTicket.status).toBe(TicketStatus.open);
+        expect(updatedManagementTicket!.status).toBe(TicketStatus.resolved);
+      });
+
+      it('should handle transaction rollback on database error', async () => {
+        const company = await Company.create({ name: 'test' });
+        await User.create({
+          name: 'Director User',
+          role: UserRole.director,
+          companyId: company.id,
+        });
+
+        const originalCreate = Ticket.create;
+        (Ticket.create as jest.Mock) = jest
+          .fn()
+          .mockRejectedValue(new Error('Database error'));
+
+        await expect(
+          controller.create({
+            companyId: company.id,
+            type: TicketType.strikeOff,
+          }),
+        ).rejects.toThrow('Database error');
+
+        Ticket.create = originalCreate;
       });
     });
   });
